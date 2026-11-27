@@ -1,4 +1,7 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+
+typedef JsonMap = Map<String, dynamic>;
 
 enum BookCategory {
   novel('Роман'),
@@ -13,7 +16,7 @@ enum BookCategory {
 }
 
 class Book {
-  final int id;
+  final String id;
   final String title;
   final String author;
   final int year;
@@ -31,36 +34,39 @@ class Book {
     required this.coverColor,
   });
 
-  factory Book.fromJson(Map<String, dynamic> json) {
-    final hexColor = (json['coverColor'] ?? '2E7D6F')
-        .toString()
-        .replaceAll('#', '');
+  factory Book.fromFirestore(DocumentSnapshot<JsonMap> doc) {
+    final data = doc.data() ?? {};
 
-    final rawList = (json['categories'] as List?) ??
-        (json['category'] != null ? [json['category']] : []);
-    final parsedCategories = rawList
-        .map(
-          (item) => BookCategory.values.firstWhere(
-            (e) => e.name == item.toString(),
-            orElse: () => BookCategory.novel,
-          ),
-        )
-        .toList();
+    final rawCategories = data['categories'] as List<dynamic>? ?? [];
+    final parsedCategories = rawCategories.map((e) {
+      try {
+        return BookCategory.values.byName(e.toString());
+      } catch (_) {
+        return BookCategory.novel;
+      }
+    }).toList();
+
+    var hexColor = (data['coverColor']?.toString() ?? '')
+        .replaceAll('#', '')
+        .trim();
+    if (hexColor.length != 6) {
+      hexColor = '2E7D6F';
+    }
 
     return Book(
-      id: int.parse(json['id'].toString()),
-      title: (json['title'] ?? '').toString(),
-      author: (json['author'] ?? '').toString(),
-      year: int.tryParse(json['year'].toString()) ?? 2026,
-      categories: parsedCategories.isEmpty
-          ? [BookCategory.novel]
-          : parsedCategories,
-      description: json['description']?.toString(),
+      id: doc.id,
+      title: data['title']?.toString() ?? '',
+      author: data['author']?.toString() ?? 'Неизвестный автор',
+      year: data['year'] is int
+          ? data['year'] as int
+          : int.tryParse(data['year']?.toString() ?? '') ?? 2026,
+      categories: parsedCategories,
+      description: data['description']?.toString() ?? '',
       coverColor: Color(int.tryParse('FF$hexColor', radix: 16) ?? 0xFF2E7D6F),
     );
   }
 
-  Map<String, dynamic> toJson() {
+  JsonMap toJson() {
     final hexColor = coverColor
         .toARGB32()
         .toRadixString(16)
@@ -72,7 +78,7 @@ class Book {
       'title': title,
       'author': author,
       'year': year,
-      'categories': categories.map((e) => e.name).toList(),
+      'categories': categories.map((c) => c.name).toList(),
       'description': description ?? '',
       'coverColor': hexColor,
     };
