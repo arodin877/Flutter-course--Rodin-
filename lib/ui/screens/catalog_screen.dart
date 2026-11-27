@@ -1,10 +1,8 @@
-import 'dart:convert';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import '../../domain/entities/book.dart';
-import '../widgets/book_card.dart';
-
-const String baseUrl = 'https://6b059059db01cf463608b81e.mockapi.io';
+import '/domain/entities/book.dart';
+import '/ui/widgets/book_card.dart';
 
 class CatalogScreen extends StatefulWidget {
   const CatalogScreen({super.key});
@@ -14,106 +12,75 @@ class CatalogScreen extends StatefulWidget {
 }
 
 class _CatalogScreenState extends State<CatalogScreen> {
-  final Set<int> _likedIds = {};
-  final TextEditingController _titleController = TextEditingController();
+  final Stream<QuerySnapshot<JsonMap>> _booksStream =
+      FirebaseFirestore.instance.collection('books').snapshots();
 
-  List<Book> _books = [];
-  bool _isLoading = true;
-  bool _isSubmitting = false;
-  String? _errorMessage;
+  final Set<String> _likedIds = {};
   bool _showOnlyFavorites = false;
-  bool _showForm = false;
 
-  @override
-  void initState() {
-    super.initState();
-    _fetchBooks();
-  }
+  bool _showForm = false;
+  bool _isSubmitting = false;
+  final TextEditingController _titleController = TextEditingController();
+  final TextEditingController _authorController = TextEditingController();
+  BookCategory _selectedCategory = BookCategory.novel;
 
   @override
   void dispose() {
     _titleController.dispose();
+    _authorController.dispose();
     super.dispose();
-  }
-
-  Future<void> _fetchBooks() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
-
-    try {
-      final response = await http.get(Uri.parse('$baseUrl/books'));
-      if (response.statusCode != 200) {
-        throw Exception('Ошибка загрузки: статус ${response.statusCode}');
-      }
-      final list = jsonDecode(response.body) as List;
-      final loadedBooks = list
-          .map((e) => Book.fromJson(e as Map<String, dynamic>))
-          .toList();
-
-      setState(() {
-        _books = loadedBooks;
-        _isLoading = false;
-      });
-    } catch (e) {
-      setState(() {
-        _errorMessage = 'Не удалось загрузить каталог: $e';
-        _isLoading = false;
-      });
-    }
   }
 
   Future<void> _addBook() async {
     final title = _titleController.text.trim();
-    if (title.isEmpty || _isSubmitting) return;
+    final author = _authorController.text.trim();
+    if (title.isEmpty) return;
 
     setState(() {
       _isSubmitting = true;
     });
 
-    final newBook = Book(
-      id: 0, // не отправляется в toJson(), сервер присвоит свой id
-      title: title,
-      author: 'Неизвестный автор',
-      year: 2026,
-      categories: [BookCategory.novel],
-      description: '',
-      coverColor: const Color(0xFF2E7D6F),
-    );
-
     try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/books'),
-        headers: {'Content-Type': 'application/json; charset=UTF-8'},
-        body: jsonEncode(newBook.toJson()),
+      final newBook = Book(
+        id: '',
+        title: title,
+        author: author.isNotEmpty ? author : 'Неизвестный автор',
+        year: 2026,
+        categories: [_selectedCategory],
+        description: '',
+        coverColor: const Color(0xFF2E7D6F),
       );
 
-      if (response.statusCode != 201) {
-        throw Exception('Ошибка создания: статус ${response.statusCode}');
+      await FirebaseFirestore.instance
+          .collection('books')
+          .add(newBook.toJson());
+
+      _titleController.clear();
+      _authorController.clear();
+      if (mounted) {
+        setState(() {
+          _selectedCategory = BookCategory.novel;
+          _showForm = false;
+        });
       }
-
-      final created = Book.fromJson(
-        jsonDecode(response.body) as Map<String, dynamic>,
-      );
-
-      setState(() {
-        _books.insert(0, created);
-        _titleController.clear();
-        _isSubmitting = false;
-      });
     } catch (e) {
-      setState(() {
-        _isSubmitting = false;
-      });
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Не удалось добавить книгу: $e')),
+        SnackBar(
+          content: Text('Не удалось добавить книгу: $e'),
+          backgroundColor: Colors.red.shade700,
+        ),
       );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSubmitting = false;
+        });
+      }
     }
   }
 
-  void _toggleLike(int id) {
+  void _toggleLike(String id) {
     setState(() {
       if (_likedIds.contains(id)) {
         _likedIds.remove(id);
@@ -124,35 +91,96 @@ class _CatalogScreenState extends State<CatalogScreen> {
   }
 
   Widget _buildAddForm() {
-    return Container(
-      margin: const EdgeInsets.only(top: 12),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF5F5F5),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Expanded(
-            child: TextField(
-              controller: _titleController,
-              decoration: const InputDecoration(
-                hintText: 'Название новой книги',
-                isDense: true,
-                border: OutlineInputBorder(),
-                fillColor: Colors.white,
-                filled: true,
+          TextField(
+            controller: _titleController,
+            enabled: !_isSubmitting,
+            decoration: InputDecoration(
+              hintText: 'Название книги...',
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 10,
               ),
-              onSubmitted: (_) => _addBook(),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: TextField(
+                  controller: _authorController,
+                  enabled: !_isSubmitting,
+                  decoration: InputDecoration(
+                    hintText: 'Автор...',
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                flex: 2,
+                child: DropdownButtonFormField<BookCategory>(
+                  value: _selectedCategory,
+                  isExpanded: true,
+                  decoration: InputDecoration(
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 9,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  items: BookCategory.values.map((category) {
+                    return DropdownMenuItem<BookCategory>(
+                      value: category,
+                      child: Text(
+                        category.label,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 14),
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: _isSubmitting
+                      ? null
+                      : (value) {
+                          if (value != null) {
+                            setState(() {
+                              _selectedCategory = value;
+                            });
+                          }
+                        },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
           ElevatedButton(
             onPressed: _isSubmitting ? null : _addBook,
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFF2E7D6F),
               foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
             ),
             child: _isSubmitting
                 ? const SizedBox(
@@ -163,155 +191,181 @@ class _CatalogScreenState extends State<CatalogScreen> {
                       color: Colors.white,
                     ),
                   )
-                : const Text('Отправить'),
+                : const Text('Добавить книгу'),
           ),
         ],
       ),
     );
   }
 
+  Widget _buildListArea(
+    AsyncSnapshot<QuerySnapshot<JsonMap>> snapshot,
+    List<Book> filteredBooks,
+  ) {
+    if (snapshot.hasError) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            'Ошибка загрузки: ${snapshot.error}',
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 15, color: Colors.redAccent),
+          ),
+        ),
+      );
+    }
+
+    if (snapshot.connectionState == ConnectionState.waiting) {
+      return const Center(
+        child: CircularProgressIndicator(color: Color(0xFF2E7D6F)),
+      );
+    }
+
+    if (filteredBooks.isEmpty) {
+      return const Center(
+        child: Text(
+          'Ничего не нашлось',
+          style: TextStyle(fontSize: 16, color: Colors.grey),
+        ),
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      itemCount: filteredBooks.length,
+      itemBuilder: (context, index) {
+        final book = filteredBooks[index];
+        return BookCard(
+          book: book,
+          isLiked: _likedIds.contains(book.id),
+          onLikeTap: () => _toggleLike(book.id),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final filteredBooks = _showOnlyFavorites
-        ? _books.where((book) => _likedIds.contains(book.id)).toList()
-        : _books;
-
     return Scaffold(
       backgroundColor: const Color(0xFFF5F5F5),
       body: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
-              color: Colors.white,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        child: StreamBuilder<QuerySnapshot<JsonMap>>(
+          stream: _booksStream,
+          builder: (context, snapshot) {
+            final allBooks = snapshot.hasData
+                ? snapshot.data!.docs
+                    .map((doc) => Book.fromFirestore(doc))
+                    .toList()
+                : <Book>[];
+
+            final filteredBooks = _showOnlyFavorites
+                ? allBooks.where((book) => _likedIds.contains(book.id)).toList()
+                : allBooks;
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+                  color: Colors.white,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
-                        'Каталог книг',
-                        style: TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF1A1A1A),
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: () {
-                          setState(() {
-                            _showForm = !_showForm;
-                          });
-                        },
-                        icon: Icon(_showForm ? Icons.close : Icons.add),
-                        tooltip: _showForm ? 'Скрыть форму' : 'Добавить книгу',
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${_books.length} книг · В избранном: ${_likedIds.length}',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey.shade600,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  InkWell(
-                    onTap: () {
-                      setState(() {
-                        _showOnlyFavorites = !_showOnlyFavorites;
-                      });
-                    },
-                    borderRadius: BorderRadius.circular(20),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: _showOnlyFavorites
-                            ? const Color(0xFFE8F4F0)
-                            : Colors.grey.shade100,
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
+                      Row(
                         children: [
-                          Icon(
-                            Icons.favorite,
-                            size: 16,
-                            color: _showOnlyFavorites
-                                ? const Color(0xFFE53935)
-                                : Colors.grey,
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            'Только избранные',
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: _showOnlyFavorites
-                                  ? const Color(0xFF2E7D6F)
-                                  : Colors.grey.shade700,
+                          const Expanded(
+                            child: Text(
+                              'Каталог книг',
+                              style: TextStyle(
+                                fontSize: 28,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF1A1A1A),
+                              ),
                             ),
+                          ),
+                          IconButton(
+                            onPressed: () {
+                              setState(() {
+                                _showForm = !_showForm;
+                              });
+                            },
+                            icon: Icon(
+                              _showForm ? Icons.close : Icons.add,
+                              color: const Color(0xFF2E7D6F),
+                            ),
+                            tooltip: 'Добавить книгу',
+                          ),
+                          IconButton(
+                            onPressed: () => FirebaseAuth.instance.signOut(),
+                            icon: const Icon(
+                              Icons.logout,
+                              color: Colors.grey,
+                            ),
+                            tooltip: 'Выйти',
                           ),
                         ],
                       ),
-                    ),
-                  ),
-                  if (_showForm) _buildAddForm(),
-                ],
-              ),
-            ),
-            Expanded(
-              child: _isLoading
-                  ? const Center(child: CircularProgressIndicator())
-                  : _errorMessage != null
-                      ? Center(
-                          child: Padding(
-                            padding: const EdgeInsets.all(24),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  _errorMessage!,
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(color: Colors.red),
-                                ),
-                                const SizedBox(height: 12),
-                                ElevatedButton(
-                                  onPressed: _fetchBooks,
-                                  child: const Text('Обновить'),
-                                ),
-                              ],
-                            ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${allBooks.length} книг в каталоге · В избранном: ${_likedIds.length}',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                      if (_showForm) _buildAddForm(),
+                      const SizedBox(height: 12),
+                      GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            _showOnlyFavorites = !_showOnlyFavorites;
+                          });
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
                           ),
-                        )
-                      : filteredBooks.isEmpty
-                          ? const Center(
-                              child: Text(
-                                'Ничего не нашлось',
-                                style:
-                                    TextStyle(fontSize: 16, color: Colors.grey),
+                          decoration: BoxDecoration(
+                            color: _showOnlyFavorites
+                                ? const Color(0xFFE8F4F0)
+                                : Colors.grey.shade100,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.favorite,
+                                size: 16,
+                                color: _showOnlyFavorites
+                                    ? const Color(0xFFE53935)
+                                    : Colors.grey,
                               ),
-                            )
-                          : ListView.builder(
-                              padding: const EdgeInsets.all(16),
-                              itemCount: filteredBooks.length,
-                              itemBuilder: (context, index) {
-                                final book = filteredBooks[index];
-                                return BookCard(
-                                  book: book,
-                                  isLiked: _likedIds.contains(book.id),
-                                  onLikeTap: () => _toggleLike(book.id),
-                                );
-                              },
-                            ),
-            ),
-          ],
+                              const SizedBox(width: 6),
+                              Text(
+                                'Только избранные',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: _showOnlyFavorites
+                                      ? const Color(0xFF2E7D6F)
+                                      : Colors.grey.shade700,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: _buildListArea(snapshot, filteredBooks),
+                ),
+              ],
+            );
+          },
         ),
       ),
     );
