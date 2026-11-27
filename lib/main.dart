@@ -1,6 +1,9 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'bloc/books_bloc.dart';
+import 'bloc/books_event.dart';
 import 'firebase_options.dart';
 import 'ui/screens/catalog_screen.dart';
 import 'ui/screens/login_screen.dart';
@@ -29,7 +32,10 @@ class MyApp extends StatelessWidget {
             );
           }
           if (snapshot.hasData) {
-            return const CatalogScreen();
+            return BlocProvider(
+              create: (_) => BooksBloc()..add(BooksLoadRequested()),
+              child: const CatalogScreen(),
+            );
           }
           return const LoginScreen();
         },

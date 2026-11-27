@@ -1,8 +1,12 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import '/domain/entities/book.dart';
-import '/ui/widgets/book_card.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter_application_1/bloc/books_bloc.dart';
+import 'package:flutter_application_1/bloc/books_event.dart';
+import 'package:flutter_application_1/bloc/books_state.dart';
+import 'package:flutter_application_1/domain/entities/book.dart';
+import 'package:flutter_application_1/ui/widgets/book_card.dart';
 
 class CatalogScreen extends StatefulWidget {
   const CatalogScreen({super.key});
@@ -12,9 +16,6 @@ class CatalogScreen extends StatefulWidget {
 }
 
 class _CatalogScreenState extends State<CatalogScreen> {
-  final Stream<QuerySnapshot<JsonMap>> _booksStream =
-      FirebaseFirestore.instance.collection('books').snapshots();
-
   final Set<String> _likedIds = {};
   bool _showOnlyFavorites = false;
 
@@ -198,28 +199,53 @@ class _CatalogScreenState extends State<CatalogScreen> {
     );
   }
 
-  Widget _buildListArea(
-    AsyncSnapshot<QuerySnapshot<JsonMap>> snapshot,
-    List<Book> filteredBooks,
-  ) {
-    if (snapshot.hasError) {
+  Widget _buildBody(BuildContext context, BooksState state) {
+    if (state is BooksLoadInProgress) {
+      return const Center(
+        child: CircularProgressIndicator(color: Color(0xFF2E7D6F)),
+      );
+    }
+
+    if (state is BooksLoadFailure) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
-          child: Text(
-            'Ошибка загрузки: ${snapshot.error}',
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 15, color: Colors.redAccent),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                state.message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 16,
+                  color: Colors.redAccent,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: () {
+                  context.read<BooksBloc>().add(BooksLoadRequested());
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF2E7D6F),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: const Text('Обновить'),
+              ),
+            ],
           ),
         ),
       );
     }
 
-    if (snapshot.connectionState == ConnectionState.waiting) {
-      return const Center(
-        child: CircularProgressIndicator(color: Color(0xFF2E7D6F)),
-      );
-    }
+    final allBooks = (state as BooksLoadSuccess).books;
+    final filteredBooks = _showOnlyFavorites
+        ? allBooks.where((book) => _likedIds.contains(book.id)).toList()
+        : allBooks;
 
     if (filteredBooks.isEmpty) {
       return const Center(
@@ -249,18 +275,10 @@ class _CatalogScreenState extends State<CatalogScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF5F5F5),
       body: SafeArea(
-        child: StreamBuilder<QuerySnapshot<JsonMap>>(
-          stream: _booksStream,
-          builder: (context, snapshot) {
-            final allBooks = snapshot.hasData
-                ? snapshot.data!.docs
-                    .map((doc) => Book.fromFirestore(doc))
-                    .toList()
-                : <Book>[];
-
-            final filteredBooks = _showOnlyFavorites
-                ? allBooks.where((book) => _likedIds.contains(book.id)).toList()
-                : allBooks;
+        child: BlocBuilder<BooksBloc, BooksState>(
+          builder: (context, state) {
+            final totalCount =
+                state is BooksLoadSuccess ? state.books.length : 0;
 
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -308,7 +326,7 @@ class _CatalogScreenState extends State<CatalogScreen> {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        '${allBooks.length} книг в каталоге · В избранном: ${_likedIds.length}',
+                        '$totalCount книг в каталоге · В избранном: ${_likedIds.length}',
                         style: TextStyle(
                           fontSize: 14,
                           color: Colors.grey.shade600,
@@ -361,7 +379,7 @@ class _CatalogScreenState extends State<CatalogScreen> {
                   ),
                 ),
                 Expanded(
-                  child: _buildListArea(snapshot, filteredBooks),
+                  child: _buildBody(context, state),
                 ),
               ],
             );
